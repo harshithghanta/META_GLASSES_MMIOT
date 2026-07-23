@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=600, height=600, initial-scale=1">
+<!-- Tells the Ray-Ban Display shell this page is built for the glasses. -->
+<meta name="mrbd-web-app-capable" content="yes">
+<title>Activity Mirror</title>
+<style>
+  /*
+    Display only. This page reads the latest prediction and shows it. It never
+    captures anything, and it is not the required implementation: the graded
+    path is the native DAT app. See README, "Herald companion".
+
+    Two constraints drive every choice below.
+
+    1. The waveguide is additive, so pure black is fully transparent and only
+       lit pixels are visible. The page is therefore black with bright text,
+       and there are no cards, borders or fills that would show as glowing
+       rectangles floating in the wearer's vision.
+    2. The viewport is a fixed 600 by 600 with no scrolling, and input is
+       keyboard only: arrow keys move focus, Enter activates, Escape goes back.
+       There is no cursor and no touch.
+  */
+
+  :root {
+    --ink: #ffffff;
+    --dim: rgba(255, 255, 255, 0.62);
+    --faint: rgba(255, 255, 255, 0.28);
+    --ok: #8affb4;
+    --warn: #ffd97a;
+    --bad: #ff9a90;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 600px;
+    height: 600px;
+    overflow: hidden;
+    background: #000;
+    color: var(--ink);
+    font-family: "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+    /* Body copy stays at or above 16px. Smaller text is unreadable on the
+       panel at arm's length. */
+    font-size: 18px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .screen {
+    width: 600px;
+    height: 600px;
+    padding: 36px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .screen[hidden] { display: none; }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    color: var(--dim);
+    font-size: 16px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* Status dot. Colour is the only decoration on the page, and it is small
+     enough not to be a distraction in the wearer's field of view. */
+  .status { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--faint); }
+  .dot.live  { background: var(--ok); }
+  .dot.stale { background: var(--warn); }
+  .dot.down  { background: var(--bad); }
+
+  .headline { display: flex; align-items: center; gap: 20px; }
+  .glyph { font-size: 76px; line-height: 1; }
+  .label { font-size: 56px; font-weight: 600; letter-spacing: -0.01em; }
+  .label.muted { font-size: 40px; color: var(--dim); font-weight: 500; }
+
+  .confidence { font-size: 22px; color: var(--dim); }
+  .confidence strong { color: var(--ink); font-weight: 600; }
+
+  /* Score bars. Rendered as thin lines rather than filled bars so the display
+     stays mostly transparent. */
+  .scores { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .row { display: grid; grid-template-columns: 96px 1fr 52px; align-items: center; gap: 12px; font-size: 17px; }
+  .row .name { color: var(--dim); }
+  .row.top .name, .row.top .value { color: var(--ink); font-weight: 600; }
+  /* Both must be block boxes. As inline spans a percentage width is ignored
+     and every bar renders empty, which looks like a dead feed rather than a
+     layout bug. */
+  .track { display: block; height: 4px; background: rgba(255, 255, 255, 0.14); border-radius: 2px; overflow: hidden; }
+  .fill { display: block; height: 100%; width: 0; background: var(--ink); border-radius: 2px; transition: width 240ms ease; }
+  .row.top .fill { background: var(--ok); }
+  .value { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
+
+  footer { margin-top: auto; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+
+  /* Focus is the only interaction affordance, so it has to be unmissable. */
+  .focusable {
+    padding: 10px 18px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    color: var(--dim);
+    font-size: 17px;
+    background: none;
+    font-family: inherit;
+    cursor: default;
+  }
+  .focusable:focus {
+    outline: none;
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+
+  .hint { color: var(--faint); font-size: 15px; }
+  .setup { font-size: 18px; color: var(--dim); line-height: 1.5; }
+  .setup code { color: var(--ink); font-family: ui-monospace, Menlo, monospace; font-size: 16px; }
+</style>
+</head>
+<body>
+
+<!-- ======================= main ======================= -->
+<div class="screen" id="screen-main">
+  <header>
+    <span>Activity Mirror</span>
+    <span class="status"><span class="dot" id="dot"></span><span id="status-text">connecting</span></span>
+  </header>
+
+  <div class="headline">
+    <span class="glyph" id="glyph">&middot;</span>
+    <span class="label muted" id="label">Waiting</span>
+  </div>
+
+  <div class="confidence" id="confidence">No prediction yet</div>
+
+  <div class="scores" id="scores"></div>
+
+  <footer>
+    <span class="hint" id="freshness"></span>
+    <button class="focusable" id="btn-refresh">Refresh</button>
+    <button class="focusable" id="btn-settings">Service</button>
+  </footer>
+</div>
+
+<!-- ======================= setup ======================= -->
+<div class="screen" id="screen-setup" hidden>
+  <header><span>Activity Mirror</span><span>Setup</span></header>
+  <p class="setup">
+    This page mirrors the latest prediction from your Assignment 2 service.
+    It needs the service address before it can show anything.
+  </p>
+  <p class="setup">
+    Open this page once in a desktop browser with the address in the query
+    string, and it will be remembered on this device.
+  </p>
+  <p class="setup"><code id="example-url"></code></p>
+  <p class="setup" id="current-endpoint"></p>
+  <footer>
+    <span class="hint">Press Escape to go back.</span>
+    <button class="focusable" id="btn-forget">Forget address</button>
+    <button class="focusable" id="btn-back">Back</button>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Configuration
+  //
+  // The endpoint is never committed. It arrives as ?api=... once, and is
+  // kept in localStorage after that. The assignment's rules forbid putting a
+  // private endpoint in submitted source, and Herald's rules forbid putting
+  // personal data in a URL, so nothing but the service address goes here.
+  // ---------------------------------------------------------------------
+  var STORAGE_KEY = "ag_activity_mirror_endpoint";
+  var POLL_INTERVAL_MS = 2000;
+  // Must match ServiceConfiguration.confidenceFloor in the iOS app. If the HUD
+  // is declining to answer, a mirror that shows a confident label beside it is
+  // worse than showing nothing.
+  var CONFIDENCE_FLOOR = 0.45;
+  // A poll that never resolves would otherwise latch `inFlight` forever and
+  // silently kill the page. A socket that is accepted but never answered does
+  // not trigger fetch's error path on its own, so the abort is the only exit.
+  var REQUEST_TIMEOUT_MS = 4000;
+  // Past this age the reading is labelled stale rather than shown as current.
+  // A wearer glancing at a number has no other way to tell it is three minutes
+  // old, and a confidently wrong stale reading is worse than a blank panel.
+  var STALE_AFTER_MS = 15000;
+
+  var ACTIVITIES = ["walking", "running", "sitting", "standing"];
+  var GLYPHS = { walking: "🚶", running: "🏃", sitting: "🪑", standing: "🧍" };
+
+  function readEndpoint() {
+    var fromQuery = new URLSearchParams(window.location.search).get("api");
+    if (fromQuery) {
+      try { localStorage.setItem(STORAGE_KEY, fromQuery); } catch (e) {}
+      return fromQuery;
+    }
+    try { return localStorage.getItem(STORAGE_KEY); } catch (e) { return null; }
+  }
+
+  var endpoint = readEndpoint();
+
+  // ---------------------------------------------------------------------
+  // Elements
+  // ---------------------------------------------------------------------
+  var el = {
+    main: document.getElementById("screen-main"),
+    setup: document.getElementById("screen-setup"),
+    dot: document.getElementById("dot"),
+    statusText: document.getElementById("status-text"),
+    glyph: document.getElementById("glyph"),
+    label: document.getElementById("label"),
+    confidence: document.getElementById("confidence"),
+    scores: document.getElementById("scores"),
+    freshness: document.getElementById("freshness"),
+    refresh: document.getElementById("btn-refresh"),
+    settings: document.getElementById("btn-settings"),
+    back: document.getElementById("btn-back"),
+    forget: document.getElementById("btn-forget"),
+    exampleUrl: document.getElementById("example-url"),
+    currentEndpoint: document.getElementById("current-endpoint")
+  };
+
+  el.exampleUrl.textContent = window.location.origin + window.location.pathname
+    + "?api=https://your-service.example.dev";
+
+  // Build the four score rows once, then only mutate their widths. Rebuilding
+  // the subtree on every poll would restart the CSS transition and make the
+  // bars flicker twice a second.
+  var rows = {};
+  ACTIVITIES.forEach(function (activity) {
+    var row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML =
+      '<span class="name"></span>'
+      + '<span class="track"><span class="fill" style="width:0%"></span></span>'
+      + '<span class="value">0%</span>';
+    row.querySelector(".name").textContent = activity;
+    el.scores.appendChild(row);
+    rows[activity] = row;
+  });
+
+  // ---------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------
+  function setStatus(kind, text) {
+    el.dot.className = "dot " + kind;
+    el.statusText.textContent = text;
+  }
+
+  function render(prediction) {
+    // Anything can come back from a service we do not control, and a throw in
+    // here is caught by the fetch chain's .catch, which would mislabel a
+    // reachable-but-malformed service as "unreachable".
+    var top = typeof prediction.label === "string" ? prediction.label : "";
+    var confidence = typeof prediction.confidence === "number"
+      && isFinite(prediction.confidence) ? prediction.confidence : 0;
+    var scores = (prediction.scores && typeof prediction.scores === "object")
+      ? prediction.scores : {};
+
+    if (!ACTIVITIES.indexOf) { return; }
+    if (ACTIVITIES.indexOf(top) === -1) {
+      renderIdle("Unknown");
+      el.confidence.textContent = "Service returned an unrecognised label.";
+      return;
+    }
+
+    var lowConfidence = confidence < CONFIDENCE_FLOOR;
+
+    // Mirror the HUD's own fallback rather than asserting a label the glasses
+    // are refusing to assert.
+    el.glyph.textContent = lowConfidence ? "·" : (GLYPHS[top] || "·");
+    el.label.textContent = lowConfidence
+      ? "Not sure"
+      : top.charAt(0).toUpperCase() + top.slice(1);
+    el.label.className = lowConfidence ? "label muted" : "label";
+
+    var percent = Math.round(confidence * 100);
+    el.confidence.innerHTML = lowConfidence
+      ? "Best guess " + top + ", <strong>" + percent + "%</strong>. Below the "
+        + Math.round(CONFIDENCE_FLOOR * 100) + "% floor."
+      : "<strong>" + percent + "%</strong> confident";
+
+    ACTIVITIES.forEach(function (activity) {
+      var score = scores[activity];
+      score = (typeof score === "number" && isFinite(score))
+        ? Math.max(0, Math.min(1, score)) : 0;
+      var row = rows[activity];
+      // Below the floor nothing is highlighted: the point of the state is that
+      // no class has earned the emphasis.
+      row.className = "row" + (activity === top && !lowConfidence ? " top" : "");
+      row.querySelector(".fill").style.width = (score * 100).toFixed(1) + "%";
+      row.querySelector(".value").textContent = Math.round(score * 100) + "%";
+    });
+  }
+
+  function renderIdle(message) {
+    el.glyph.textContent = "·";
+    el.label.textContent = message;
+    el.label.className = "label muted";
+    el.confidence.textContent = "No prediction yet";
+    ACTIVITIES.forEach(function (activity) {
+      var row = rows[activity];
+      row.className = "row";
+      row.querySelector(".fill").style.width = "0%";
+      row.querySelector(".value").textContent = "0%";
+    });
+  }
+
+  function describeAge(receivedAtSeconds) {
+    if (!receivedAtSeconds) { return ""; }
+    var ageMs = Date.now() - receivedAtSeconds * 1000;
+    if (ageMs < 2000) { return "just now"; }
+    if (ageMs < 60000) { return Math.round(ageMs / 1000) + "s ago"; }
+    return Math.round(ageMs / 60000) + "m ago";
+  }
+
+  // ---------------------------------------------------------------------
+  // Polling
+  // ---------------------------------------------------------------------
+  var inFlight = false;
+
+  function poll() {
+    if (!endpoint) {
+      setStatus("down", "no service set");
+      renderIdle("Setup needed");
+      el.freshness.textContent = "Press Enter for setup.";
+      return;
+    }
+    // Skip rather than queue. On a slow link the poll interval can be shorter
+    // than the round trip, and stacking requests would show the wearer results
+    // arriving out of order.
+    if (inFlight) { return; }
+    inFlight = true;
+
+    // Bound every request. Without this, one connection that is accepted and
+    // never answered leaves `inFlight` true for the lifetime of the page: the
+    // interval keeps firing, every call returns at the guard above, and the
+    // mirror freezes on whatever it was last showing with no error state.
+    var controller = typeof AbortController === "function" ? new AbortController() : null;
+    var timer = controller
+      ? setTimeout(function () { controller.abort(); }, REQUEST_TIMEOUT_MS)
+      : null;
+
+    fetch(endpoint.replace(/\/+$/, "") + "/latest", {
+      cache: "no-store",
+      signal: controller ? controller.signal : undefined
+    })
+      .then(function (response) {
+        if (!response.ok) { throw new Error("HTTP " + response.status); }
+        return response.json();
+      })
+      .then(function (payload) {
+        if (payload.status !== "ok") {
+          setStatus("live", "connected");
+          renderIdle("Waiting");
+          el.freshness.textContent = "The app has not run a prediction yet.";
+          return;
+        }
+        var ageMs = payload.received_at ? Date.now() - payload.received_at * 1000 : 0;
+        var stale = ageMs > STALE_AFTER_MS;
+        setStatus(stale ? "stale" : "live", stale ? "stale" : "live");
+        render(payload);
+        el.freshness.textContent = describeAge(payload.received_at);
+      })
+      .catch(function (error) {
+        var abortedByUs = error && error.name === "AbortError";
+        setStatus("down", abortedByUs ? "timed out" : "unreachable");
+        el.freshness.textContent = abortedByUs
+          ? "No answer in " + (REQUEST_TIMEOUT_MS / 1000) + "s"
+          : String((error && error.message) || error);
+      })
+      .then(function () {
+        // Not `.finally`: the abort timer must be cleared and the in-flight
+        // latch released on both paths, and this stays inside the ES5-ish
+        // vocabulary the rest of the file uses.
+        if (timer) { clearTimeout(timer); }
+        inFlight = false;
+      }, function () {
+        if (timer) { clearTimeout(timer); }
+        inFlight = false;
+      });
+  }
+
+  // ---------------------------------------------------------------------
+  // Navigation
+  //
+  // Input on the glasses is arrow keys, Enter and Escape. There is no cursor,
+  // so every interactive element is a real button and focus is explicit.
+  // ---------------------------------------------------------------------
+  function show(screen) {
+    el.main.hidden = screen !== "main";
+    el.setup.hidden = screen !== "setup";
+    if (screen === "setup") {
+      el.currentEndpoint.textContent = endpoint
+        ? "Currently set to: " + endpoint
+        : "No address is set.";
+    }
+    var first = document.querySelector(".screen:not([hidden]) .focusable");
+    if (first) { first.focus(); }
+  }
+
+  function focusables() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll(".screen:not([hidden]) .focusable")
+    );
+  }
+
+  function moveFocus(delta) {
+    var items = focusables();
+    if (!items.length) { return; }
+    var index = items.indexOf(document.activeElement);
+    var next = (index + delta + items.length) % items.length;
+    items[next].focus();
+  }
+
+  document.addEventListener("keydown", function (event) {
+    switch (event.key) {
+      case "ArrowDown":
+      case "ArrowRight":
+        event.preventDefault();
+        moveFocus(1);
+        break;
+      case "ArrowUp":
+      case "ArrowLeft":
+        event.preventDefault();
+        moveFocus(-1);
+        break;
+      case "Enter":
+        event.preventDefault();
+        if (document.activeElement && document.activeElement.click) {
+          document.activeElement.click();
+        } else if (!endpoint) {
+          show("setup");
+        }
+        break;
+      case "Escape":
+        event.preventDefault();
+        show("main");
+        break;
+    }
+  });
+
+  el.refresh.addEventListener("click", function () {
+    if (!endpoint) { show("setup"); return; }
+    poll();
+  });
+  // Always reachable. Previously setup was only shown when no endpoint was
+  // stored, so a single wrong `?api=` value bricked the page permanently:
+  // there is no text input and no address bar on the glasses, and the stored
+  // value would win on every subsequent load.
+  el.settings.addEventListener("click", function () { show("setup"); });
+  el.back.addEventListener("click", function () { show("main"); });
+  el.forget.addEventListener("click", function () {
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+    endpoint = null;
+    renderIdle("Setup needed");
+    setStatus("down", "no service set");
+    el.freshness.textContent = "Re-open with ?api=… to set a new address.";
+  });
+
+  // ---------------------------------------------------------------------
+  // Start
+  // ---------------------------------------------------------------------
+  renderIdle("Waiting");
+  setStatus("", "connecting");
+  show(endpoint ? "main" : "setup");
+  poll();
+  setInterval(poll, POLL_INTERVAL_MS);
+})();
+</script>
+</body>
+</html>

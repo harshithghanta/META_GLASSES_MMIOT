@@ -1,0 +1,70 @@
+# XcodeGen spec — `brew install xcodegen && cd ios-app && xcodegen generate`
+#
+# This is a convenience, not a requirement. The README documents the equivalent
+# manual steps in Xcode, and the .xcodeproj is intentionally not committed:
+# a generated project keeps the diff readable and avoids the merge conflicts a
+# four-person team would otherwise hit on pbxproj.
+name: ActivityAssistant
+
+options:
+  bundleIdPrefix: edu.mmml.assignment3
+  deploymentTarget:
+    # DAT requires iOS 15.2+; the app uses Observation and AsyncStream.makeStream,
+    # which are iOS 17+.
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+configs:
+  Debug: debug
+  Release: release
+
+packages:
+  MetaWearablesDAT:
+    url: https://github.com/facebook/meta-wearables-dat-ios
+    exactVersion: 0.8.0
+  ActivityAssistantCore:
+    path: ../ActivityAssistantCore
+
+targets:
+  ActivityAssistant:
+    type: application
+    platform: iOS
+    sources:
+      - path: ActivityAssistant
+      - path: Fixtures
+        optional: true
+        buildPhase: resources
+    configFiles:
+      Debug: Secrets.xcconfig
+      Release: Secrets.xcconfig
+    dependencies:
+      - package: ActivityAssistantCore
+        product: ActivityAssistantCore
+      - package: MetaWearablesDAT
+        product: MWDATCore
+      - package: MetaWearablesDAT
+        product: MWDATCamera
+      - package: MetaWearablesDAT
+        product: MWDATDisplay
+      # Linked in every configuration. XcodeGen has no per-configuration
+      # dependency filter, so the honest statement is that it ships in Release
+      # too; `USE_MOCK_DEVICE` in Secrets.xcconfig is what actually decides
+      # whether the kit is ever enabled at runtime.
+      - package: MetaWearablesDAT
+        product: MWDATMockDevice
+    # One `settings:` block. Two would not merge — YAML keeps the last mapping
+    # for a duplicate key, so an earlier block is silently discarded.
+    settings:
+      base:
+        # NOT the `info:` key. That tells XcodeGen to *generate* an Info.plist
+        # at the given path, overwriting whatever is already there — which
+        # would destroy the hand-written one carrying the entire MWDAT
+        # dictionary, the ExternalAccessory protocol, the URL scheme and every
+        # IMAGEBIND_* key, leaving an app that cannot reach the glasses or the
+        # service. Pointing INFOPLIST_FILE at the existing file uses it.
+        INFOPLIST_FILE: ActivityAssistant/Support/Info.plist
+        SWIFT_VERSION: "6.0"
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        # The SDK ships binary xcframeworks that are not yet Swift 6 strict-
+        # concurrency clean; the app's own code is.
+        SWIFT_STRICT_CONCURRENCY: targeted

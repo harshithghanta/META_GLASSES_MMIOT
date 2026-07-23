@@ -1,0 +1,17 @@
+# Never commit the real endpoint or tokens (assignment rule).
+ios-app/Secrets.xcconfig
+
+# Generated Xcode project — regenerate with `xcodegen generate`.
+ios-app/*.xcodeproj
+ios-app/*.xcworkspace
+xcuserdata/
+
+# Mock Device Kit fixtures are recordings of people; keep them local.
+ios-app/Fixtures/
+
+.build/
+.swiftpm/
+DerivedData/
+__pycache__/
+*.pyc
+.DS_Store

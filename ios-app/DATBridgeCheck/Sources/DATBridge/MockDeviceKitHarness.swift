@@ -1,0 +1,1 @@
+../../../ActivityAssistant/DAT/MockDeviceKitHarness.swift

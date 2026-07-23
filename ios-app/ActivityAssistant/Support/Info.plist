@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ============================================================
+         Device Access Toolkit configuration.
+
+         In Meta AI **Developer Mode** the MetaAppID and ClientToken may be
+         left at 0 — registration is always allowed and attestation is
+         skipped. For a release-channel build, fill in the real values from
+         Wearables Developer Center ▸ your project ▸ Configuration.
+         ============================================================ -->
+    <key>MWDAT</key>
+    <dict>
+        <key>AppLinkURLScheme</key>
+        <string>activityassistant</string>
+        <key>MetaAppID</key>
+        <string>$(MWDAT_APPLICATION_ID)</string>
+        <key>ClientToken</key>
+        <string>$(MWDAT_CLIENT_TOKEN)</string>
+        <key>TeamID</key>
+        <string>$(DEVELOPMENT_TEAM)</string>
+        <key>DAMEnabled</key>
+        <true/>
+    </dict>
+
+    <!-- The glasses are an ExternalAccessory, not a plain BLE peripheral.
+         Note: this is also why an app using DAT cannot be submitted to the
+         App Store — see README ▸ Limitations. -->
+    <key>UISupportedExternalAccessoryProtocols</key>
+    <array>
+        <string>com.meta.ar.wearable</string>
+    </array>
+
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>bluetooth-peripheral</string>
+        <string>external-accessory</string>
+    </array>
+
+    <!-- Registration deep-links out to the Meta AI app and returns here. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>activityassistant</string>
+            </array>
+        </dict>
+    </array>
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+        <string>fb-messenger</string>
+    </array>
+
+    <!-- ============================================================
+         Usage strings.
+         The camera prompt is worded for the *glasses* camera, because that
+         is the only camera this app ever opens.
+         ============================================================ -->
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Connects to your Ray-Ban Display glasses to capture a frame and show the result.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Captures a single frame from your glasses camera to recognise your current activity.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Records a two-second clip from your glasses microphone to improve activity recognition. Audio is optional and is never stored.</string>
+
+    <!-- ============================================================
+         Assignment 2 service. Values come from Secrets.xcconfig, which is
+         git-ignored — no endpoint or token is committed.
+         ============================================================ -->
+    <key>IMAGEBIND_SCHEME</key>
+    <string>$(IMAGEBIND_SCHEME)</string>
+    <key>IMAGEBIND_ENDPOINT</key>
+    <string>$(IMAGEBIND_ENDPOINT)</string>
+    <key>IMAGEBIND_TOKEN</key>
+    <string>$(IMAGEBIND_TOKEN)</string>
+    <key>AUDIO_ENABLED</key>
+    <string>$(AUDIO_ENABLED)</string>
+    <key>SPEECH_ENABLED</key>
+    <string>$(SPEECH_ENABLED)</string>
+    <key>USE_MOCK_DEVICE</key>
+    <string>$(USE_MOCK_DEVICE)</string>
+
+    <key>UILaunchScreen</key>
+    <dict/>
+</dict>
+</plist>

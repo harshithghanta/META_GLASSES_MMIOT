@@ -1,0 +1,19 @@
+# Reference service for the Assignment 2 ImageBind endpoint.
+#
+# The mock (mock_server.py) needs NONE of this — it runs on the standard
+# library alone. Install these only when serving the real model.
+
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9      # required by FastAPI for multipart/form-data
+
+torch>=2.0
+torchvision>=0.15
+torchaudio>=2.0
+
+# ImageBind is not on PyPI; install from source:
+#   pip install git+https://github.com/facebookresearch/ImageBind.git
+# On Colab this also pulls pytorchvideo, timm, ftfy and regex.
+
+# Optional, for exposing a Colab notebook over a public URL:
+# pyngrok>=7.0
