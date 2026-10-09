@@ -1,5 +1,9 @@
 """
-Assignment 2 ImageBind service, wrapped in the contract Assignment 3 expects.
+Zero-shot ImageBind activity service, in the contract Assignment 3 expects.
+
+The model is pretrained `imagebind_huge` scoring four hand-written text
+prompts (see PROMPTS). Nothing is fine-tuned and no Assignment 2 checkpoint is
+loaded; to use one, replace `get_model()`.
 
 This is the off-glasses half of the system. Nothing runs on the phone or the
 glasses: the app posts one JPEG (and optionally one short WAV) here, and gets
@@ -20,9 +24,13 @@ Run in Colab (what Assignment 2 used), exposing it over a tunnel:
     from pyngrok import ngrok; print(ngrok.connect(8000))
     !uvicorn app:app --host 0.0.0.0 --port 8000
 
-The iOS app also accepts a bare Gradio `/run/predict` response shape, so an
-existing Assignment 2 Gradio deployment works without this file. This exists so
-the pipeline is reproducible from a clean checkout.
+Note: the iOS client POSTs multipart/form-data to `{endpoint}/predict`. A
+stock Gradio app does not accept that request, so an existing Gradio
+deployment does NOT work unchanged; serve this file (or an adapter with the
+same contract) instead.
+
+Env vars: IMAGEBIND_TOKEN, LATEST_PUBLIC, PRELOAD_MODEL, AUDIO_WEIGHT,
+SOFTMAX_TEMPERATURE.
 """
 
 from __future__ import annotations
@@ -32,6 +40,7 @@ import os
 import secrets
 import threading
 import time
+from contextlib import asynccontextmanager
 from typing import Optional
 
 import torch
@@ -64,10 +73,33 @@ PROMPTS = {
 # (walking vs. running) and almost none about posture.
 AUDIO_WEIGHT = float(os.environ.get("AUDIO_WEIGHT", "0.3"))
 
+# Softmax temperature over cosine similarities. 0.05 is a hand-picked value,
+# NOT ImageBind's learned logit scale (this file re-normalises the embeddings,
+# which discards that scale). Confidence calibration — and therefore the app's
+# 0.45 floor — has not been validated. Override with SOFTMAX_TEMPERATURE.
+TEMPERATURE = float(os.environ.get("SOFTMAX_TEMPERATURE", "0.05"))
+
 # Optional shared secret. Set IMAGEBIND_TOKEN here and in Secrets.xcconfig.
 AUTH_TOKEN = os.environ.get("IMAGEBIND_TOKEN", "")
 
-app = FastAPI(title="ImageBind Activity Service", version="1.0")
+# When a token is set, /latest requires it too, unless LATEST_PUBLIC=1. The
+# Herald companion cannot send a bearer token, so set LATEST_PUBLIC=1 if you
+# want the mirror while the service is token-protected.
+LATEST_PUBLIC = os.environ.get("LATEST_PUBLIC", "0") == "1"
+
+# Load the model at startup (default) so the first /predict does not spend
+# minutes downloading ~4.5 GB of weights and blow the client's 12 s budget.
+PRELOAD_MODEL = os.environ.get("PRELOAD_MODEL", "1") != "0"
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    if PRELOAD_MODEL:
+        await run_in_threadpool(get_model)
+    yield
+
+
+app = FastAPI(title="ImageBind Activity Service", version="1.0", lifespan=lifespan)
 
 # The Herald companion is a separate origin polling /latest, so it needs CORS.
 # Only the read-only endpoints are exposed cross-origin.
@@ -132,6 +164,18 @@ def _similarities(embedding, text_embeddings):
     return normalized @ text_embeddings.T
 
 
+def _require_token(authorization: Optional[str]) -> None:
+    """401 unless the configured bearer token was sent. No-op without a token."""
+    if not AUTH_TOKEN:
+        return
+    expected = f"Bearer {AUTH_TOKEN}".encode()
+    # Compare bytes: compare_digest raises TypeError on non-ASCII str input,
+    # which would turn a bad header into a 500.
+    sent = (authorization or "").encode("utf-8", "surrogateescape")
+    if not secrets.compare_digest(sent, expected):
+        raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+
+
 @app.post("/predict")
 async def predict(
     image: UploadFile = File(...),
@@ -143,10 +187,7 @@ async def predict(
     # which is worse than having no auth at all: the README and the iOS client
     # both behave as though the endpoint is gated, so a tunnel that leaked
     # would have been wide open while looking protected.
-    if AUTH_TOKEN:
-        expected = f"Bearer {AUTH_TOKEN}"
-        if not authorization or not secrets.compare_digest(authorization, expected):
-            raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+    _require_token(authorization)
 
     image_bytes = await image.read()
     if not image_bytes:
@@ -195,13 +236,27 @@ def _infer(image_bytes: bytes, audio_bytes: Optional[bytes]) -> dict:
             audio_path = os.path.join(tmp, "clip.wav")
             with open(audio_path, "wb") as handle:
                 handle.write(audio_bytes)
-            inputs[ModalityType.AUDIO] = ib_data.load_and_transform_audio_data(
-                [audio_path], _device
-            )
-            modalities.append("audio")
+            # Audio is optional. A clip that cannot be decoded (empty, wrong
+            # format, too short) must degrade to a vision-only prediction,
+            # not turn the whole request into a 500.
+            try:
+                inputs[ModalityType.AUDIO] = ib_data.load_and_transform_audio_data(
+                    [audio_path], _device
+                )
+                modalities.append("audio")
+            except Exception as error:  # noqa: BLE001 — any decode failure
+                log.warning("audio clip unusable, predicting vision-only: %s", error)
 
         with torch.no_grad():
-            embeddings = model(inputs)
+            try:
+                embeddings = model(inputs)
+            except Exception as error:  # noqa: BLE001
+                if ModalityType.AUDIO not in inputs:
+                    raise
+                log.warning("audio forward pass failed, retrying vision-only: %s", error)
+                inputs.pop(ModalityType.AUDIO)
+                modalities.remove("audio")
+                embeddings = model(inputs)
             logits = _similarities(embeddings[ModalityType.VISION], _text_embeddings)
 
             if ModalityType.AUDIO in embeddings:
@@ -214,11 +269,10 @@ def _infer(image_bytes: bytes, audio_bytes: Optional[bytes]) -> dict:
                 # train, and nothing here contradicts Assignment 2's model.
                 logits = (1 - AUDIO_WEIGHT) * logits + AUDIO_WEIGHT * audio_logits
 
-            # Temperature 0.05 matches ImageBind's contrastive scale. Without
-            # it the cosine similarities sit in a narrow band and softmax comes
-            # out nearly uniform, which would make the confidence floor
-            # meaningless.
-            probabilities = torch.softmax(logits / 0.05, dim=-1)[0]
+            # Without a temperature the cosine similarities sit in a narrow
+            # band and softmax comes out nearly uniform. See TEMPERATURE above:
+            # the value is a hand-picked default and calibration is unverified.
+            probabilities = torch.softmax(logits / TEMPERATURE, dim=-1)[0]
 
     scores = {name: float(probabilities[i]) for i, name in enumerate(ACTIVITIES)}
     label = max(scores, key=scores.get)
@@ -233,14 +287,19 @@ def _infer(image_bytes: bytes, audio_bytes: Optional[bytes]) -> dict:
 
 
 @app.get("/latest")
-async def latest():
+async def latest(authorization: Optional[str] = Header(None)):
     """Read-only mirror for the optional Herald companion.
 
     Returns only the prediction. The frame and the audio clip are never stored
     and are never served — the assignment's privacy rules say not to keep raw
     media longer than a trial needs, and a display-only web page has no reason
     to see it.
+
+    Gated by the same bearer token as /predict when one is configured, unless
+    LATEST_PUBLIC=1.
     """
+    if not LATEST_PUBLIC:
+        _require_token(authorization)
     with _latest_lock:
         if _latest is None:
             return JSONResponse({"status": "idle"}, status_code=200)

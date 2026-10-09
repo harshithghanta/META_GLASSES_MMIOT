@@ -14,6 +14,10 @@ torchaudio>=2.0
 # ImageBind is not on PyPI; install from source:
 #   pip install git+https://github.com/facebookresearch/ImageBind.git
 # On Colab this also pulls pytorchvideo, timm, ftfy and regex.
+# Caution (not verified here): ImageBind's own requirements may pin older
+# torch/torchvision versions that conflict with the lines above. If pip tries
+# to downgrade torch, install ImageBind with `--no-deps` and add its
+# dependencies by hand.
 
 # Optional, for exposing a Colab notebook over a public URL:
 # pyngrok>=7.0

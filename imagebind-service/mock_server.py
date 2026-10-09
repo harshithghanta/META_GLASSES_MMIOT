@@ -8,6 +8,9 @@ on a laptop, in CI, and while the real Colab tunnel is down.
 
     python3 imagebind-service/mock_server.py --port 8000
 
+Binds 127.0.0.1 by default. To reach it from an iPhone on the same Wi-Fi, add
+`--host 0.0.0.0` and point the app at http://<your-mac-LAN-IP>:8000.
+
 It speaks the same contract as `app.py`, and it can be told to misbehave on
 purpose, which is how the required endpoint-failure trial is reproduced without
 waiting for Colab to actually die:
@@ -38,6 +41,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 ACTIVITIES = ["walking", "running", "sitting", "standing"]
+MODES = {"ok", "low", "timeout", "error", "garbage"}
 
 # Deterministic by default: a mock that returns different numbers on every run
 # makes a failing check impossible to reproduce.
@@ -69,7 +73,12 @@ def parse_multipart(body: bytes, content_type: str) -> dict[str, bytes]:
         match = re.search(rb'name="([^"]+)"', head)
         if not match:
             continue
-        parts[match.group(1).decode()] = payload.rstrip(b"\r\n")
+        # Strip exactly the one CRLF that precedes the next delimiter. A bare
+        # rstrip(b"\r\n") also ate trailing 0x0D/0x0A bytes that belong to a
+        # binary payload (e.g. the last PCM sample of a WAV).
+        if payload.endswith(b"\r\n"):
+            payload = payload[:-2]
+        parts[match.group(1).decode()] = payload
     return parts
 
 
@@ -126,7 +135,7 @@ def distribution(label: str, confidence: float) -> dict[str, float]:
 
 
 def next_scripted_call() -> tuple[str, str, float]:
-    """The six-step cycle used by the smoke test and the trial replay."""
+    """The six-step cycle served to requests with no query string (manual runs)."""
     global _call_count
     with _count_lock:
         index = _call_count
@@ -212,17 +221,36 @@ class Handler(BaseHTTPRequestHandler):
         mode = query.get("mode", [None])[0]
         forced_label = query.get("label", [None])[0]
 
+        # Reject bad query parameters with a 400 instead of letting the handler
+        # raise (which dropped the connection with no response at all).
+        if forced_label is not None and forced_label not in ACTIVITIES:
+            return self._send_json(
+                {"error": f"unknown label {forced_label!r}; expected one of {ACTIVITIES}"},
+                status=400,
+            )
+        if mode is not None and mode not in MODES:
+            return self._send_json(
+                {"error": f"unknown mode {mode!r}; expected one of {sorted(MODES)}"},
+                status=400,
+            )
+        try:
+            requested_confidence = float(query.get("confidence", ["0.82"])[0])
+            delay = query.get("delay", [None])[0]
+            delay = None if delay is None else float(delay)
+        except ValueError as error:
+            return self._send_json({"error": f"bad numeric parameter: {error}"}, status=400)
+
         if mode is None and forced_label is None:
             mode, label, confidence = next_scripted_call()
         else:
             label = forced_label or RNG.choice(ACTIVITIES)
-            confidence = float(query.get("confidence", ["0.82"])[0])
+            confidence = requested_confidence
             mode = mode or "ok"
 
         if mode == "timeout":
             # Outlast the iOS client's 12 s budget without closing the socket,
             # which is exactly how a recycled Colab tunnel behaves.
-            time.sleep(float(query.get("delay", ["20"])[0]))
+            time.sleep(20.0 if delay is None else delay)
             return self._send_json({"error": "too late"}, status=504)
 
         if mode == "error":
@@ -249,14 +277,17 @@ class Handler(BaseHTTPRequestHandler):
             _latest = {**payload, "received_at": time.time(), "source": "mock"}
 
         # A little latency so the Analyzing states are actually visible.
-        time.sleep(float(query.get("delay", ["0.35"])[0]))
+        time.sleep(0.35 if delay is None else delay)
         return self._send_json(payload)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="interface to bind (default 127.0.0.1; use 0.0.0.0 to accept LAN connections from a phone)",
+    )
     args = parser.parse_args()
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
