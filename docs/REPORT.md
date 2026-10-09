@@ -2,16 +2,19 @@
 
 **Assignment 3, Multimodal Machine Learning** · Team *(fill in)* · *(date)*
 
-> Numbers below reference [`TEST_RESULTS.md`](TEST_RESULTS.md), which is
-> currently a **scripted placeholder**. Re-run the trials on device and update
-> both files before submitting.
+> **No on-device trials have been run yet.** Numbers below come from
+> [`TEST_RESULTS.md`](TEST_RESULTS.md), which holds **simulated** output from a
+> scripted harness. Run the trials on device and replace both files' numbers
+> before submitting.
 
 ## App flow
 
 The wearer taps **Analyze** on the Ray-Ban Display. The paired iPhone captures
 one frame from the glasses camera through the Device Access Toolkit, optionally
-records a two-second clip from the glasses microphone, and posts both to the
-Assignment 2 ImageBind service. The returned label and confidence are rendered
+records a two-second clip from the glasses microphone, and posts both to an
+ImageBind service. The included service runs pretrained ImageBind zero-shot
+against one text prompt per activity; nothing is fine-tuned. The returned
+label and confidence are rendered
 back on the HUD with a **Try Again** button. No model runs on the phone or the
 glasses.
 
@@ -30,7 +33,8 @@ Five states, each one screen on the HUD:
 | Failure | `Server took too long` / *Tap to retry* / **Try Again** |
 
 Analyzing is split into three visible sub-steps rather than one spinner. Over
-Bluetooth the capture alone can take a second, and a wearer staring at an
+Bluetooth the capture alone is expected to take about a second (not yet
+measured), and a wearer staring at an
 undifferentiated spinner cannot tell a slow camera from a dead endpoint.
 
 Two decisions about what *not* to show. Failure messages on the HUD are one
@@ -41,17 +45,19 @@ we are about to caveat is worse than staying quiet.
 
 ## Test results
 
-> *Scripted replay, not measured. Every figure in this section and the next is
-> a placeholder — see [`TEST_RESULTS.md`](TEST_RESULTS.md).*
+> *Simulated, not measured. Every figure in this section and the next comes
+> from a scripted harness — see [`TEST_RESULTS.md`](TEST_RESULTS.md). No
+> on-device trials have been run.*
 
-Eight trials, two per activity. **5 of 6** confident predictions were correct
-(83%); one trial fell below the confidence floor and was declined, and one hit
-an endpoint failure. Median end-to-end latency was **1.9 s**.
+The scripted harness replays eight trials, two per activity: 5 of 6 confident
+predictions "correct" (83%), one declined below the confidence floor, and one
+endpoint failure. These numbers were chosen to exercise each code path. They
+are not results.
 
-Audio was attached on every trial. It separates walking from running clearly —
-footfall cadence is low-frequency and survives the 8 kHz HFP ceiling — and does
-essentially nothing for sitting versus standing, which is a posture question
-that a microphone cannot answer.
+Hypothesis, untested: audio should help separate walking from running, since
+footfall cadence is low-frequency and should survive the 8 kHz HFP ceiling. It
+should do essentially nothing for sitting versus standing, which is a posture
+question a microphone cannot answer.
 
 ## Failure case: standing read as sitting (trial 7)
 
@@ -68,29 +74,31 @@ evidence of it — what ImageBind actually sees is a desk, a chair back and a
 torso at desk height, which is a much better match for the "sitting on a chair"
 prompt than for "standing upright". This is a systematic weakness of the
 egocentric viewpoint, not a bad frame: **the wearer's own body is the one thing
-the wearer's camera cannot see.** The confusion is one-directional in our
-trials, standing → sitting, which fits that explanation.
+the wearer's camera cannot see.** Whether the confusion is one-directional
+(standing → sitting) has to be checked on real trials.
 
 Two things follow. First, the margin is the honest signal here, not the
 confidence: 0.52 with the runner-up at 0.29 is a much weaker claim than 0.52
 against a flat tail, which is why the trial log records margin separately.
 Second, the realistic fix is not a better prompt but a different modality —
 IMU-based posture would settle it immediately, and the toolkit does not expose
-the IMU on this path. Raising the floor to catch this trial would also have
-rejected trial 7's legitimate neighbours and cost more than it saved.
+the IMU on this path. Raising the floor would catch this trial. In the scripted
+table it would cost nothing, since the lowest correct confident trial is at
+0.69. Whether it costs correct answers in practice depends on real trial data.
+The 0.45 floor itself is a provisional default, not tuned on validation data.
 
 ## Design choice: keeping the camera stream warm
 
 **DAT has no one-shot photo API.** `capturePhoto` is only valid while a video
 stream is already running, so the obvious implementation is
 `addStream → start → capturePhoto → stop` on every tap. Over Bluetooth Classic
-that startup dominates: the wearer waits well over a second before the shutter,
-on every single retry.
+that startup is expected to dominate (not yet measured), making the wearer wait
+before the shutter on every retry.
 
 `DATWearableDevice` instead keeps the stream **warm**. It starts on the first
 capture and stays up for 20 seconds afterwards, so the common Result → Try
 Again → Result loop pays the startup cost once instead of three times. Twenty
-seconds was chosen to cover the gap between a result appearing and the wearer
+seconds is a design assumption, not a measurement, chosen to cover the gap between a result appearing and the wearer
 tapping retry (assumed ~3 s; measure this on device) with wide margin, while
 still being well short of a demo-length idle.
 

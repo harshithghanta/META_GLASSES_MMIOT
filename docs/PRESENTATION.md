@@ -11,18 +11,18 @@ The temptation is to open with "we couldn't get the glasses, so here's a mock."
 That's an apology, and it invites the grader to spend the whole demo thinking
 about what's missing.
 
-Invert it. You have something most submissions won't: **a test suite that
-actually runs, and a contract check that verifies the client and the service
-against each other rather than against two copies of the same assumption.**
-Open there. Then name the hardware boundary precisely and without hedging —
-precision reads as competence, vagueness reads as cover.
+Invert it. You have **a check suite for the flow logic, and a contract check
+that runs the real Swift decoder over responses from the mock service**.
+Before you claim either, run them yourself (see README, "Verification
+status"). Then name the hardware boundary precisely and without hedging.
 
-The line that does the most work:
+The line that does the most work, if it is still true on the day:
 
-> "The interaction logic and the client-to-service contract are verified by
-> automated checks that run on any laptop. The DAT bridge is the one layer we
-> could not compile, and I can tell you exactly why and exactly where the seam
-> is."
+> "The interaction logic and the client-to-mock-service contract are checked
+> by automated checks that run on a laptop. The iOS app itself, including the
+> DAT bridge, has not been built in Xcode. The bridge is type-checked only
+> against stubs transcribed from the real SDK interface. I can tell you
+> exactly where that seam is."
 
 Then, when you explain that `WearableDevice` is a protocol *so that* the flow
 could be tested without hardware, the architecture stops looking like a
@@ -45,7 +45,7 @@ you're tight.
 Walking / Running / Sitting / Standing. Team, date.
 
 > Speaker note: one sentence only. "A paired iOS app that reads one frame off
-> the glasses, asks our Assignment 2 ImageBind model what you're doing, and
+> the glasses, asks a zero-shot ImageBind service what you're doing, and
 > puts the answer back on the HUD."
 
 ### 2 — The required path
@@ -57,8 +57,12 @@ The data flow, one line, no decoration:
 > and you met it exactly.
 
 ### 3 — What's verified, and what isn't
-The three-row table. Verified: flow logic, wire contract, Herald page.
-Not compiled: the DAT bridge. Not produced: the live run.
+The README "Verification status" list:
+
+- Run: flow checks, decoder against the mock service, Herald page.
+- Type-checked against stubs only: the DAT bridge.
+- Never built: the iOS app.
+- Not produced: the live run.
 
 > Speaker note: this is the slide that earns trust. Deliver it flatly, without
 > apology, and move on quickly. Don't linger — lingering signals discomfort.
@@ -68,7 +72,7 @@ Ready / Analyzing / Result / Not sure / Failure, shown as five small panels.
 
 > Speaker note: two design points worth making out loud.
 > (1) Analyzing is three visible sub-steps, not one spinner — over Bluetooth
-> the capture alone takes ~1s, and a wearer staring at an undifferentiated
+> the capture alone is expected to take ~1s (unmeasured), and a wearer staring at an undifferentiated
 > spinner can't tell a slow camera from a dead endpoint.
 > (2) Failure messages are one short sentence with no error codes. The full
 > diagnostic goes to the phone. A wearer can't act on an HTTP status.
@@ -81,25 +85,26 @@ stream is running.
 > that most teams will not have hit, because most teams will not have read the
 > camera docs carefully. Naive implementation is
 > `addStream → start → capture → stop` per tap, which makes the wearer wait
-> over a second before every shutter. Warm stream, 20s idle window, torn down
-> after because a live video stream is the dominant battery draw. Mention the
-> 25s display sleep — the two go quiet together, which is the detail that shows
-> you thought about it rather than picked a round number.
+> over a second before every shutter (expected; not yet measured). Warm stream,
+> 20s idle window, torn down after because a live video stream is the dominant
+> battery draw. The 20s value is a design assumption chosen to sit under the
+> documented 25s display sleep; say so rather than implying it was measured.
 
 ### 6 — The failure case: standing read as sitting
-Trial 7. The model said sitting at 0.52, above the floor, so the app asserted a
-wrong answer confidently.
+Scripted trial 7 (replace with a real failure from your on-device run). The
+model said sitting at 0.52, above the floor, so the app asserted a wrong answer
+confidently.
 
 > Speaker note: the insight is the one-liner — **the wearer's own body is the
 > one thing the wearer's camera cannot see.** An egocentric frame of your own
 > posture contains a desk and a torso at desk height, which matches "sitting on
-> a chair" better than "standing upright." Say the confusion was
-> one-directional in your trials; that's what makes it a systematic viewpoint
-> problem rather than a bad frame.
+> a chair" better than "standing upright." Only say the confusion is
+> one-directional if your *real* trials show it. The current table is scripted.
 >
-> If asked "why not just raise the floor?" — because it would also have
-> rejected legitimate neighbours and cost more than it saved. Have that answer
-> ready; it's the obvious follow-up.
+> If asked "why not just raise the floor?", answer from your real data. In the
+> scripted table, raising the floor just above 0.52 would lose no correct
+> answer, because the lowest correct confident trial is 0.69. Don't claim
+> otherwise.
 
 ### 7 — Declining to answer
 The low-confidence path. Below 0.45 the HUD says `Not sure`, offers a retry,
@@ -111,10 +116,10 @@ and stays silent rather than speaking a guess.
 > hiding it inside an accuracy percentage would misrepresent the system.
 
 ### 8 — Multimodal, honestly *(cuttable)*
-Audio separates walking from running. It does essentially nothing for sitting
-vs standing.
+Hypothesis, not yet measured: audio should help separate walking from running,
+and do essentially nothing for sitting vs standing.
 
-> Speaker note: the reason is concrete and worth stating — DAT has no
+> Speaker note: present this as a hypothesis unless real trials show it. DAT has no
 > microphone API at all, so the glasses mic comes over Bluetooth HFP at 8 kHz
 > mono. Footfall cadence is low-frequency and survives that ceiling. Posture is
 > not an acoustic question at any sample rate. This is the slide that shows you
@@ -154,17 +159,19 @@ across it — which costs nothing extra now that the stream is already warm.
 Answer the literal question first, then redirect to what you did verify. Don't
 volunteer a defence before you've been asked for one.
 
-**"How do you know the app works if you couldn't compile that layer?"**
-The seam is a protocol. The flow, the copy, the retry logic and the wire format
-are all exercised against a scripted device and a live service. What's
-unverified is the adapter, and it's about 300 lines with the SDK calls isolated
-in one file.
+**"How do you know the app works if you never built it?"**
+You don't know that yet; say so. The seam is a protocol. The flow, the copy,
+the retry logic and the response decoding are exercised against a scripted
+device and the *mock* service. What's unverified is the iOS app and the DAT
+adapter. The SDK calls live in `DATWearableDevice`, `GlassesDisplayRenderer`,
+`MockDeviceKitHarness` and `ActivityAssistantApp`.
 
 **"Why iOS?"** Straight answer: it's what the team had. Don't invent a reason.
 
-**"Why 0.45?"** Be honest if you haven't yet tuned it on your own validation
-split. "It's the floor we shipped; here's the trade-off it makes" is a fine
-answer. Claiming a derivation you didn't do is not.
+**"Why 0.45?"** It is a provisional default and has not been tuned on any
+validation data. The service's confidence calibration is also unvalidated.
+"It's the floor we shipped; here's the trade-off it makes" is a fine answer.
+Claiming a derivation you didn't do is not.
 
 **"Isn't 83% low?"** It's six confident trials — the interval on that is
 enormous and you should say so rather than defend the number. The interesting
