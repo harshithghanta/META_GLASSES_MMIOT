@@ -158,10 +158,13 @@ final class AppModel {
     }
 
     func beginRegistration() {
-        do {
-            try Wearables.shared.startRegistration()
-        } catch {
-            note("Registration could not start: \(error)")
+        // `startRegistration()` is `async throws(RegistrationError)` in DAT 0.8.0.
+        Task {
+            do {
+                try await Wearables.shared.startRegistration()
+            } catch {
+                note("Registration could not start: \(error)")
+            }
         }
     }
 
