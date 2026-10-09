@@ -36,8 +36,9 @@ enum Configuration {
     ///
     /// The two numbers worth explaining:
     ///
-    /// * **`confidenceFloor: 0.45`** — chosen from the Assignment 2 validation
-    ///   split, not guessed. See `docs/REPORT.md`.
+    /// * **`confidenceFloor: 0.45`** — a provisional default. It has NOT been
+    ///   tuned on validation data, and the service's confidence calibration
+    ///   is itself unverified. See `docs/REPORT.md`.
     /// * **`timeout: 12`** — a warm Colab GPU answers in well under 2 s. Twelve
     ///   seconds is long enough that a slow-but-alive service still succeeds,
     ///   and short enough that a dead tunnel surfaces as a retry prompt while
