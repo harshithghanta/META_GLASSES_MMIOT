@@ -136,7 +136,7 @@ enum TrialHarness {
         }
         let clock = ScriptedClock(stamps: stamps)
 
-        let device = ScriptedWearableDevice(name: "Mock Device Kit (iOS)")
+        let device = ScriptedWearableDevice(name: "Scripted device (simulated)")
         let client = ScriptedImageBindClient(responses: trials.map(\.response))
         let engine = ActivityAssistantEngine(
             device: device,

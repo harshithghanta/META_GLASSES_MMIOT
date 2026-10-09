@@ -284,6 +284,21 @@ enum FlowChecks {
 
         Check.suite("Trial log")
 
+        await Check.test("an observer sees the new trial when the terminal state arrives") {
+            // Regression: the trial used to be appended after `state` changed,
+            // so `onStateChange` observers copied a log one trial short.
+            let (engine, _, _) = makeEngine(
+                responses: [.prediction(.sample(.walking, confidence: 0.9))]
+            )
+            final class Recorder { var counts: [Int] = [] }
+            let recorder = Recorder()
+            engine.onStateChange = { [weak engine] state in
+                if state.isTerminal { recorder.counts.append(engine?.trials.count ?? -1) }
+            }
+            await engine.analyzeOnce()
+            Check.equal(recorder.counts, [1])
+        }
+
         await Check.test("records correctness and separates low-confidence from wrong") {
             let (engine, _, _) = makeEngine(
                 responses: [
