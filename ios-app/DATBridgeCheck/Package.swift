@@ -3,29 +3,28 @@ import PackageDescription
 
 // Type-checks the Device Access Toolkit bridge on a laptop.
 //
-// The real DAT SDK ships as binary xcframeworks behind a Meta developer
-// account, so the bridge could not be compiled at all during development —
-// and an uncompiled 300-line concurrency-heavy file is exactly where bugs
-// hide. Two of them did: an actor-isolated continuation mutated from a
-// `@Sendable` closure (a hard error even in Swift 5 mode) and a task group
-// that deadlocked on timeout.
+// The real DAT SDK ships as binary iOS xcframeworks, so the bridge cannot be
+// built without Xcode and the iOS SDK. This package type-checks it on a Mac
+// instead.
 //
-// `Sources/MWDAT*` are hand-written stubs matching the *shape* of the DAT
-// 0.8.0 API as documented. `Sources/DATBridge` contains SYMLINKS to the real
-// app sources, so there is exactly one copy of the bridge and it cannot drift
-// from what this checks.
+// `Sources/MWDAT*` are stubs transcribed from the REAL DAT 0.8.0 public
+// `.swiftinterface` files (github.com/facebook/meta-wearables-dat-ios, tag
+// 0.8.0). They mirror every symbol the app uses: names, optionality, typed
+// throws and async. `Sources/DATBridge` contains SYMLINKS to the real app
+// sources, so there is exactly one copy of the bridge.
 //
 //     cd ios-app/DATBridgeCheck && swift build
 //
-// ## What this does and does not prove
+// ## What this does and does not show
 //
-// PROVES: the bridge is internally consistent, actor isolation is correct,
-// continuations are resumed exactly once, and it compiles under Swift 6
-// strict concurrency.
+// SHOWS: the bridge type-checks under Swift 6 against the SDK's public API as
+// transcribed into these stubs.
 //
-// DOES NOT PROVE: that the stub signatures match the real SDK. They are
-// written from Meta's published API reference, not from the binary. Expect to
-// reconcile names on the first real Xcode build — but the *logic* is checked.
+// DOES NOT SHOW: runtime behaviour (state transitions, callbacks, reentrancy,
+// continuation handling in practice), or that the transcription is
+// error-free. When the SDK version changes, re-diff the stubs against the new
+// .swiftinterface. `ActivityAssistantApp.swift`, `HFPAudioRecorder.swift`
+// and `GlassesSpeaker.swift` are NOT included: they need iOS-only APIs.
 let package = Package(
     name: "DATBridgeCheck",
     platforms: [.macOS(.v14)],
