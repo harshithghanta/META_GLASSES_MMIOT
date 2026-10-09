@@ -46,7 +46,9 @@ enum MockDeviceKitHarness {
         static let standing = Fixtures(feedVideoName: "standing_feed", capturedImageName: "standing_still")
     }
 
-    private static var pairedDevice: MockDevice?
+    /// `any MockGlasses`, not `MockDevice`: in DAT 0.8.0 `services` (and so
+    /// the camera kit) only exists on `MockGlasses`.
+    private static var pairedDevice: (any MockGlasses)?
 
     /// Enables the kit and pairs one simulated pair of glasses. Call before
     /// `DATWearableDevice.connect()`.
@@ -71,7 +73,7 @@ enum MockDeviceKitHarness {
         try load(fixtures, into: pairedDevice)
     }
 
-    private static func load(_ fixtures: Fixtures, into device: MockDevice) throws {
+    private static func load(_ fixtures: Fixtures, into device: any MockGlasses) throws {
         guard let feed = Bundle.main.url(forResource: fixtures.feedVideoName, withExtension: "mp4") else {
             throw MockFixtureError.missing("\(fixtures.feedVideoName).mp4")
         }

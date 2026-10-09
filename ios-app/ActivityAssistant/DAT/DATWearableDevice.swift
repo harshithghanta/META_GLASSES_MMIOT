@@ -7,10 +7,12 @@ import MWDATDisplay
 /// The required DAT path: Ray-Ban Display camera → this app → ImageBind → HUD.
 ///
 /// Written against **Device Access Toolkit 0.8.0** (`meta-wearables-dat-ios`,
-/// products `MWDATCore` / `MWDATCamera` / `MWDATDisplay`). It is not compiled
-/// in this repository's automated checks, because building it needs Xcode, a
-/// registered Meta app and the SDK's binary xcframeworks — see README
-/// "What is and isn't verified". Everything above it in the stack (the flow,
+/// products `MWDATCore` / `MWDATCamera` / `MWDATDisplay`). It has never been
+/// compiled against the real SDK: building it needs Xcode and the iOS SDK.
+/// Its call sites have been checked by hand against the published 0.8.0
+/// `.swiftinterface` files, and `ios-app/DATBridgeCheck` type-checks it
+/// against stubs that mirror those signatures — see README
+/// "Verification status". Everything above it in the stack (the flow,
 /// the client, the display copy) is covered by `swift run corecheck`, which is
 /// exactly why `WearableDevice` exists as a protocol.
 ///
@@ -28,13 +30,14 @@ import MWDATDisplay
 /// stays up for `streamIdleTimeout` afterwards, so back-to-back retries pay
 /// the cost once. The stream still tears down on idle rather than being held
 /// forever, because a live video stream is the dominant battery draw on the
-/// glasses. See `docs/REPORT.md` for the measurement behind the timeout.
+/// glasses. The 20 s window is a design assumption, not a measurement — see
+/// `docs/REPORT.md`.
 actor DATWearableDevice: WearableDevice {
 
     // MARK: - Tuning
 
     /// How long the video stream stays up after a capture. Long enough to
-    /// cover a wearer reading a result and tapping Try Again (~3 s observed),
+    /// cover a wearer reading a result and tapping Try Again (~3 s assumed, not yet measured on device),
     /// short enough not to stream video through an idle demo.
     private let streamIdleTimeout: Duration = .seconds(20)
 
@@ -60,9 +63,17 @@ actor DATWearableDevice: WearableDevice {
     private var stream: MWDATCamera.Stream?
     private var display: Display?
 
-    private var listenerTokens: [AnyListenerToken] = []
+    /// Ceiling on waiting for the device session to reach `.started` and for
+    /// a new camera stream to reach `.streaming`. Without it a device that
+    /// never comes up leaves the app on "Connecting" / "Capturing…" forever.
+    private let stateWaitTimeout: Duration = .seconds(8)
+
+    private var listenerTokens: [any AnyListenerToken] = []
     private var photoContinuation: CheckedContinuation<Data, Error>?
     private var captureWatchdog: Task<Void, Never>?
+    /// Identifies the capture `photoContinuation` belongs to, so a stale
+    /// watchdog can never fail a newer capture.
+    private var captureID = 0
     private var streamTeardownTask: Task<Void, Never>?
 
     /// Guards `warmStream` against a teardown that has already committed.
@@ -102,8 +113,13 @@ actor DATWearableDevice: WearableDevice {
         )
         try session.start()
 
-        // `start()` returns before the link is up; wait for the state we need.
-        for await state in session.stateStream() where state == .started { break }
+        // `start()` returns before the link is up; wait for the state we need,
+        // but not forever.
+        let started = await waitUntil(timeout: stateWaitTimeout) { session.state == .started }
+        guard started else {
+            session.stop()
+            throw PredictionError.captureFailed("device session did not start (state: \(session.state))")
+        }
         self.session = session
 
         // Camera permission is granted in the Meta AI app, not by an iOS
@@ -202,6 +218,19 @@ actor DATWearableDevice: WearableDevice {
         // Instead the deadline is an in-actor watchdog. Both it and the photo
         // callback run on this actor and both clear `photoContinuation`, so
         // exactly one of them can resume it.
+        // A previous capture may still be pending — e.g. the wearer cancelled
+        // a run mid-capture and immediately started another. Resolve it first:
+        // overwriting the continuation would leak it (its caller would hang
+        // forever) and leave its watchdog armed to fail *this* capture.
+        if photoContinuation != nil {
+            captureWatchdog?.cancel()
+            captureWatchdog = nil
+            photoContinuation?.resume(throwing: PredictionError.captureFailed("superseded by a newer capture"))
+            photoContinuation = nil
+        }
+
+        captureID &+= 1
+        let id = captureID
         let jpeg: Data = try await withCheckedThrowingContinuation { continuation in
             self.photoContinuation = continuation
             self.captureWatchdog = Task { [captureTimeout] in
@@ -210,9 +239,13 @@ actor DATWearableDevice: WearableDevice {
                 // No `await`: a Task created inside an actor method inherits that
                 // actor's isolation, so this already runs on the actor. That is
                 // what makes the watchdog and deliverPhoto mutually exclusive.
-                self.failCapture("no photo within \(captureTimeout)")
+                self.failCapture("no photo within \(captureTimeout)", id: id)
             }
-            stream.capturePhoto(format: .jpeg)
+            // Real 0.8.0 returns false when no stream is running; fail fast
+            // instead of waiting out the watchdog.
+            if !stream.capturePhoto(format: .jpeg) {
+                self.failCapture("capturePhoto was rejected (stream not running)", id: id)
+            }
         }
 
         scheduleStreamTeardown()
@@ -256,12 +289,13 @@ actor DATWearableDevice: WearableDevice {
         listenerTokens.append(photoToken)
 
         stream.start()
-        // NOTE: the iOS SDK exposes observation both as `x.statePublisher.listen { }`
-        // (returning a token you must retain) and as an async sequence. The
-        // async spelling is what the session guide uses; if `stateStream()`
-        // does not resolve against 0.8.0, switch this and the session wait
-        // above to the publisher form and await a continuation instead.
-        for await state in stream.stateStream() where state == .streaming { break }
+        // DAT 0.8.0's `Stream` has no async state sequence (only `state` and
+        // `statePublisher`), so poll `state` against a deadline.
+        let streaming = await waitUntil(timeout: stateWaitTimeout) { stream.state == .streaming }
+        guard streaming else {
+            stream.stop()
+            throw PredictionError.captureFailed("camera stream did not start (state: \(stream.state))")
+        }
 
         self.stream = stream
         return stream
@@ -276,7 +310,24 @@ actor DATWearableDevice: WearableDevice {
         photoContinuation = nil
     }
 
+    /// Polls `condition` every 50 ms until it holds or `timeout` elapses.
+    private func waitUntil(timeout: Duration, _ condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < deadline, !Task.isCancelled else { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return true
+    }
+
+    /// Fails capture `id`, unless a newer capture has replaced it.
+    private func failCapture(_ reason: String, id: Int) {
+        guard id == captureID else { return }
+        failCapture(reason)
+    }
+
     private func failCapture(_ reason: String) {
+        captureWatchdog?.cancel()
         captureWatchdog = nil
         photoContinuation?.resume(throwing: PredictionError.captureFailed(reason))
         photoContinuation = nil
@@ -306,8 +357,9 @@ actor DATWearableDevice: WearableDevice {
     /// delivers, stalling the trial until the watchdog fires.
     private func tearDownStream(epoch: Int) {
         guard epoch == streamEpoch else { return }
+        // DAT 0.8.0 has no `DeviceSession.removeStream()`; stopping the
+        // stream is the whole teardown.
         stream?.stop()
-        session?.removeStream()
         stream = nil
         streamEpoch &+= 1
     }
@@ -369,9 +421,10 @@ actor DATWearableDevice: WearableDevice {
         // the process.
         failCapture("device disconnected")
         tearDownStream(epoch: streamEpoch)
+        // DAT 0.8.0 has no `DeviceSession.removeDisplay()`.
         display?.stop()
-        session?.removeDisplay()
         session?.stop()
+        for token in listenerTokens { await token.cancel() }
         listenerTokens.removeAll()
         IntentBus.shared.finish()
         display = nil

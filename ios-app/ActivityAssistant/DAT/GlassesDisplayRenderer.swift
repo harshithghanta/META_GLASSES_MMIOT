@@ -58,8 +58,8 @@ enum GlassesDisplayRenderer {
         case .neutral:  nil                      // Ready needs no ornament.
         case .working:  nil                      // The stage text already says it.
         case .success:  .checkmarkCircle
-        case .caution:  .exclamationmarkTriangle
-        case .failure:  .exclamationmarkCircle
+        case .caution:  .exclamationTriangle   // real 0.8.0 IconName spelling
+        case .failure:  .exclamationCircle
         }
     }
 
@@ -73,8 +73,8 @@ enum GlassesDisplayRenderer {
     private static func iconName(for intent: DisplayFrame.Intent) -> IconName? {
         switch intent {
         case .analyze:  .arrowRight
-        case .tryAgain: .arrowClockwise
-        case .dismiss:  .xmark
+        case .tryAgain: .twoArrowsClockwise
+        case .dismiss:  .x
         }
     }
 }

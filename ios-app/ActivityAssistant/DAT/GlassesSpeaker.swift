@@ -17,6 +17,8 @@ actor GlassesSpeaker: ResultSpeaker {
 
     nonisolated let isEnabled: Bool
     private let synthesizer = AVSpeechSynthesizer()
+    /// Strongly held: `AVSpeechSynthesizer.delegate` is weak.
+    private let completion = UtteranceCompletion()
 
     init(isEnabled: Bool) {
         self.isEnabled = isEnabled
@@ -46,7 +48,15 @@ actor GlassesSpeaker: ResultSpeaker {
 
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-        synthesizer.speak(utterance)
+
+        // `speak` returns immediately. Wait for the utterance to finish (or
+        // a safety timeout) before returning: the caller re-acquires the HFP
+        // capture route as soon as we return, which would cut speech off.
+        synthesizer.delegate = completion
+        await withCheckedContinuation { continuation in
+            completion.arm(continuation, timeout: .seconds(10))
+            synthesizer.speak(utterance)
+        }
     }
 
     /// Polls for the playback route for up to a second.
@@ -62,5 +72,52 @@ actor GlassesSpeaker: ResultSpeaker {
 
     func stop() {
         synthesizer.stopSpeaking(at: .immediate)
+    }
+}
+
+/// Resumes a waiting `speak` when the utterance finishes or is cancelled, or
+/// after a timeout so a missed delegate callback can never hang a trial.
+/// Resumes at most once.
+private final class UtteranceCompletion: NSObject, AVSpeechSynthesizerDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var generation = 0
+
+    func arm(_ continuation: CheckedContinuation<Void, Never>, timeout: Duration) {
+        lock.lock()
+        let previous = self.continuation
+        self.continuation = continuation
+        generation &+= 1
+        let armed = generation
+        lock.unlock()
+        previous?.resume()
+        Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            self?.resume(ifGeneration: armed)
+        }
+    }
+
+    /// Timeout path: only fires for the utterance it was armed for.
+    private func resume(ifGeneration armed: Int) {
+        lock.lock()
+        guard armed == generation else { lock.unlock(); return }
+        lock.unlock()
+        resume()
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        resume()
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        resume()
+    }
+
+    private func resume() {
+        lock.lock()
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume()
     }
 }
