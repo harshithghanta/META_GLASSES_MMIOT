@@ -2,11 +2,13 @@ import Foundation
 
 /// Everything the flow needs from a pair of glasses.
 ///
-/// Three things conform to this:
+/// Conformers:
 ///
 ///   * `DATWearableDevice` (iOS app) — the real Device Access Toolkit session.
-///   * `MockDeviceKitWearable` (iOS app) — the DAT Mock Device Kit, which
-///     serves frames from a fixture bundle and mirrors the HUD in a window.
+///     With `USE_MOCK_DEVICE = YES`, `MockDeviceKitHarness` enables the DAT
+///     Mock Device Kit underneath it, serving frames from bundled fixtures.
+///   * `MirroringWearableDevice` (iOS app) — a decorator that also mirrors
+///     the HUD onto the phone.
 ///   * `ScriptedWearableDevice` (this package) — a deterministic fake used by
 ///     the unit tests and the trial harness.
 ///

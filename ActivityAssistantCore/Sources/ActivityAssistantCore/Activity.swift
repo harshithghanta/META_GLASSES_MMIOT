@@ -1,6 +1,8 @@
 import Foundation
 
-/// The four activities the Assignment 2 ImageBind model was fine-tuned on.
+/// The four activity classes. `imagebind-service/app.py` scores them
+/// zero-shot with pretrained ImageBind and one text prompt per class; nothing
+/// is fine-tuned.
 ///
 /// The endpoint returns labels as lowercase strings.  We keep the enum closed
 /// because the display flow needs a guaranteed-short human label and a glyph
@@ -34,9 +36,9 @@ public enum Activity: String, CaseIterable, Sendable, Codable {
         }
     }
 
-    /// Tolerant parse: the service has been seen to return `"Walking"`,
-    /// `"walking"` and `"a photo of a person walking"` depending on whether the
-    /// zero-shot prompt template was stripped server-side. Accept all three.
+    /// Tolerant parse: a service may return `"Walking"`, `"walking"` or the
+    /// raw prompt `"a photo of a person walking"`, depending on whether the
+    /// zero-shot prompt template is stripped server-side. Accept all three.
     public init?(serviceLabel raw: String) {
         let normalized = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if let exact = Activity(rawValue: normalized) {

@@ -214,9 +214,10 @@ public final class ActivityAssistantEngine {
         // answer aloud — all after the flow had visibly returned to Ready.
         guard isCurrent(generation) else { return }
 
-        state = terminal
-        await present(frame(for: terminal))
-
+        // The trial is logged BEFORE `state` changes. `onStateChange` fires
+        // from `state`'s didSet, and observers (the iOS AppModel) copy
+        // `trials` in that callback — appending afterwards left them one
+        // trial behind until the next run started.
         let outcome: TrialRecord.Outcome
         switch terminal {
         case .result(let prediction): outcome = .predicted(prediction)
@@ -235,6 +236,9 @@ public final class ActivityAssistantEngine {
                 totalSeconds: clock() - startedAt
             )
         )
+
+        state = terminal
+        await present(frame(for: terminal))
 
         // Speaking is opt-in and only for a result we trust — announcing a
         // guess we're about to caveat would be worse than staying quiet.

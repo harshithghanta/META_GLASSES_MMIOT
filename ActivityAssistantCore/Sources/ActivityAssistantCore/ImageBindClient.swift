@@ -21,7 +21,8 @@ public struct ServiceConfiguration: Sendable {
     /// endpoint-failure trial we're required to demonstrate.
     public let timeout: Double
     /// Below this, the flow shows the low-confidence fallback instead of
-    /// asserting an answer. See `docs/REPORT.md` for how 0.45 was chosen.
+    /// asserting an answer. 0.45 is a provisional default, not yet tuned on
+    /// any validation data — see `docs/REPORT.md`.
     public let confidenceFloor: Double
     /// Length of the optional audio window.
     public let audioWindowSeconds: Double

@@ -2,9 +2,10 @@ import Foundation
 
 /// A deterministic stand-in for the glasses.
 ///
-/// Used by the unit tests and by `scripts/run_trials.swift`, which produces
-/// the eight-trial table in `docs/TEST_RESULTS.md` without hardware. The real
-/// `DATWearableDevice` and `MockDeviceKitWearable` live in the iOS app target
+/// Used by the checks and by `swift run corecheck --trials` (`TrialHarness` in
+/// `Sources/CoreCheck/Entry.swift`), which produces the simulated table in
+/// `docs/TEST_RESULTS.md` without hardware. The real `DATWearableDevice`
+/// (with `MockDeviceKitHarness` on the mock path) lives in the iOS app target
 /// because they import the Device Access Toolkit; this one is pure Foundation
 /// so it builds and runs anywhere.
 public actor ScriptedWearableDevice: WearableDevice {
