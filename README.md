@@ -4,66 +4,89 @@ Assignment 3, Multimodal Machine Learning.
 
 A paired iOS app that captures one frame from Ray-Ban Display glasses through
 Meta's Device Access Toolkit, sends it (plus an optional two-second audio clip)
-to the Assignment 2 ImageBind service, and renders the predicted activity back
-on the glasses. The model runs off-glasses; nothing is trained here.
+to an ImageBind service, and renders the predicted activity back on the
+glasses. The model runs off-glasses. The included service (`app.py`) uses
+pretrained ImageBind zero-shot with one text prompt per class; nothing is
+trained or fine-tuned here.
 
 Activities: **walking · running · sitting · standing**
 
 ---
 
-## Read this first: what is verified, and what is not
+## Verification status — read this first
 
-Being straight about this matters more than the code.
+Nothing in this repo has run on glasses, and the iOS app has never been
+compiled. What has and has not been checked:
 
-| Part | Status |
-|---|---|
-| Flow state machine, display copy, error handling | **Verified.** `swift run corecheck` — 30 checks, runs on any machine with the Swift toolchain. |
-| Client ⇄ service wire contract | **Verified end-to-end.** `python3 scripts/smoke_test.py` — 32 checks. It starts the service, posts a real multipart body, and pipes the real response through the real Swift decoder. |
-| Herald companion | **Verified in a browser** against the live service, in its live, stale, low-confidence and unreachable states. |
-| `ios-app/ActivityAssistant/DAT/*` — the DAT bridge | **Compiles and type-checks**, under Swift 6 strict concurrency, against shape-only stubs of the DAT API — `cd ios-app/DATBridgeCheck && swift build`. Signatures still need reconciling against the real SDK on first Xcode build. |
-| The rest of the iOS app (SwiftUI, `AVAudioSession`) | **Not compiled.** UIKit and `AVAudioSession` are iOS-only, so these need Xcode. |
-| Live demo, demo video, contribution statement | **Not produced.** These need the hardware, the team and you. See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) and [`docs/CONTRIBUTIONS.md`](docs/CONTRIBUTIONS.md), which are prepared for you to fill in. |
+**Run (passing):**
 
-The whole architecture follows from that split. `WearableDevice` is a protocol
-precisely so the interesting logic could be tested without a headset, and so
-the same engine drives the mock and the real glasses.
+- `python3 scripts/smoke_test.py`: the Python half of its checks (service
+  contract, failure modes, `/latest`) against `mock_server.py`. Its other
+  checks pipe responses through the Swift decoder (`swift run corecheck
+  --decode`) and need a Swift toolchain.
+- `app.py`'s FastAPI layer (multipart parsing, response shape, auth,
+  vision-only fallback, `/latest`), with ImageBind and torch replaced by small
+  fakes. The real model's loading and its confidence calibration have **not**
+  been run.
+- Herald companion: checked by hand in a browser against the mock service.
 
-### Why the DAT bridge is compiled against stubs
+**Written but not re-run after the latest changes:** `swift run corecheck` (31
+checks of the flow state machine, display copy and wire decoding). It needs
+only the Swift toolchain. It has not been run in CI. Run it yourself before
+trusting it.
 
-An uncompiled, concurrency-heavy file is where bugs hide, and the real SDK is
-locked behind a Meta developer account. So `ios-app/DATBridgeCheck` contains
-hand-written stubs matching the *shape* of the documented DAT 0.8.0 API, plus
-**symlinks** to the real bridge sources — one copy of the code, no drift.
+**Type-checked only, against stubs:** `ios-app/ActivityAssistant/DAT/*`, via
+`cd ios-app/DATBridgeCheck && swift build` (macOS). The stubs are transcribed
+from the real DAT 0.8.0 `.swiftinterface` files, and every SDK call site was
+checked by hand against those files. The real binary SDK has never been linked.
 
-It earned its keep immediately. Compiling the bridge for the first time
-surfaced three defects that reading had not:
+**Untested:**
 
-- `self.photoContinuation = continuation` inside an `@escaping @Sendable`
-  closure — a cross-actor mutation, and a **hard compile error even in Swift 5
-  mode**. The bridge did not build at all.
-- `MWDATCamera.Stream` collides with `Foundation.Stream`; the unqualified name
-  was ambiguous.
-- `MockDeviceKitHarness.pairedDevice` was nonisolated global mutable state,
-  which Swift 6 rejects.
+- Building the app in Xcode.
+- Anything on real Ray-Ban Display glasses or the Mock Device Kit.
+- The HFP microphone path and spoken results.
+- The real ImageBind model.
+- The 0.45 confidence floor. It is a provisional default, not a tuned value.
+- The live demo, demo video and contribution statement. These need the
+  hardware and the team. See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) and
+  [`docs/CONTRIBUTIONS.md`](docs/CONTRIBUTIONS.md).
 
-**What this proves:** the bridge is internally consistent, actor isolation is
-correct, and continuations are resumed exactly once.
-**What it does not prove:** that the stub signatures match the real binary.
-They come from Meta's published API reference. Expect to reconcile names on the
-first Xcode build — but the *logic* underneath is checked.
+`WearableDevice` is a protocol so the flow logic can be exercised without a
+headset, and so the same engine drives the mock and the real glasses.
+
+### Why the DAT bridge is type-checked against stubs
+
+The DAT SDK ships as binary xcframeworks. Their public `.swiftinterface` files
+are readable in the public `facebook/meta-wearables-dat-ios` repo at tag
+`0.8.0`. `ios-app/DATBridgeCheck` contains stubs that mirror those signatures
+for every symbol the app uses, plus **symlinks** to the real bridge sources, so
+the bridge can be type-checked on a Mac without Xcode or the iOS SDK.
+
+An earlier version of these stubs was written from documentation and hid
+several real mismatches. For example, `Stream` has no `stateStream()`,
+`DeviceSession` has no `removeStream()`/`removeDisplay()`, the icon names
+were wrong, `services` lives on `MockGlasses`, and `startRegistration()` is
+`async`. Those were fixed by diffing against the real interface.
+
+**What this shows:** the bridge type-checks against the real API *as
+transcribed*.
+**What it does not show:** runtime behaviour. That includes actor reentrancy,
+whether continuations resume exactly once in practice, and how the device
+actually behaves. Only a real build on a device can show that.
 
 ### Two findings that will affect your demo plan
 
-1. **The Mock Device Kit does not emulate the display.** As of DAT 0.8.0 there
-   is `MockCameraKit`, `MockCaptouchKit` and `MockPermissions`, but no
-   `MockDisplayKit`, and the only documented pairing model is `.rayBanMeta`,
-   which has no display at all. Camera capture is fully mockable; **the HUD
+1. **The Mock Device Kit does not emulate the display.** In DAT 0.8.0 there is
+   `MockCameraKit`, `MockCaptouchKit` and `MockPermissions`, but no
+   `MockDisplayKit`. None of the mock glasses models (`.rayBanMeta`,
+   `.oakleyMetaHSTN`, `.oakleyMetaVanguard`, `.rayBanMetaOptics`,
+   `.metaGlasses`) is the Ray-Ban Display. Camera capture is mockable; **the HUD
    half of this assignment can only be shown on real Ray-Ban Display
    hardware.** On the mock path the app renders the HUD on the phone instead,
    and says so on screen rather than pretending.
-2. **An app that links DAT cannot be submitted to the App Store.** The SDK uses
-   `ExternalAccessory`. Irrelevant for grading, relevant if you were planning
-   to ship it.
+2. **An app that links DAT may not be submittable to the App Store.** The app
+   declares `ExternalAccessory` usage. This has not been confirmed with Meta or
+   Apple. Irrelevant for grading, relevant if you were planning to ship it.
 
 ---
 
@@ -76,7 +99,7 @@ ActivityAssistantCore/     Platform-free logic. Builds and self-checks anywhere.
     FlowState.swift                 The five states, plus the trial log
     DisplayFrame.swift              What the wearer sees, device-independent
     WearableDevice.swift            The seam: real glasses, mock, or scripted
-    ImageBindClient.swift           Multipart client for the A2 service
+    ImageBindClient.swift           Multipart client for the ImageBind service
     Prediction.swift                Wire format, both response shapes
   Sources/CoreCheck/                The check suite and the trial replay
 
@@ -92,7 +115,7 @@ ios-app/ActivityAssistant/
 ios-app/DATBridgeCheck/             Stub SDK; type-checks the bridge on a laptop
 
 imagebind-service/
-  app.py                            FastAPI wrapper around the A2 model
+  app.py                            FastAPI service: zero-shot ImageBind + prompts
   mock_server.py                    Stdlib-only mock, with failure injection
 
 herald-companion/index.html         Optional 600 × 600 display-only mirror
@@ -105,18 +128,20 @@ docs/                               Report, test results, demo script
 ## Quick start, no hardware and no Xcode
 
 Everything in this section runs on a plain Mac with the Swift toolchain.
+Step 4 needs macOS. Steps 1 to 3 should also work on Linux, but that has not
+been tried.
 
 ```bash
 # 1. The flow, the display copy, the error handling
 cd ActivityAssistantCore && swift run corecheck
 
-# 2. The eight-trial table in docs/TEST_RESULTS.md
+# 2. The simulated eight-trial table in docs/TEST_RESULTS.md (scripted, not measured)
 swift run corecheck --trials
 
-# 3. The client ⇄ service contract, end to end
+# 3. The client ⇄ mock-service contract (Swift decoder + Python service)
 cd .. && python3 scripts/smoke_test.py
 
-# 4. The DAT bridge type-checks under Swift 6 strict concurrency
+# 4. The DAT bridge type-checks against stubs of the real 0.8.0 API
 cd ios-app/DATBridgeCheck && swift build
 ```
 
@@ -135,9 +160,12 @@ cd herald-companion && python3 -m http.server 8080 &
 
 ### 1. Prerequisites
 
-- **Xcode 16+.** `project.yml` sets `SWIFT_VERSION = 6.0`, which earlier Xcode
-  releases cannot build. (The DAT SDK itself only requires 14+, but this app
-  does not.) Only Command Line Tools are needed for the checks above.
+- **Xcode 26 (iOS 26 SDK).** `HFPAudioRecorder` uses
+  `AVAudioSession.CategoryOptions.allowBluetoothHFP`, which first appears in
+  the iOS 26 SDK. The DAT 0.8.0 binaries were also built with Swift 6.3. With
+  an older Xcode, expect compile errors. (For Xcode 16 you could switch that
+  option back to `.allowBluetooth`, but that is untested.) Only Command Line
+  Tools are needed for the checks above.
 - **iPhone on iOS 15.2+.** This app targets iOS 17 because it uses
   `Observation` and `AsyncStream.makeStream`.
 - **Meta AI app v272+**, glasses firmware **v127+**.
@@ -235,14 +263,24 @@ A successful response:
 }
 ```
 
-The client also accepts a bare Gradio `/run/predict` response, which wraps the
-same object in a one-element `data` array — so **an existing Assignment 2
-Gradio deployment works unchanged**. Point `IMAGEBIND_ENDPOINT` at it and skip
-`app.py` entirely.
+The decoder will also unwrap that same object from a one-element `data` array.
+That does **not** make a stock Gradio deployment compatible. The client always
+POSTs multipart/form-data to `{endpoint}/predict`, which Gradio's API does not
+accept, and Gradio's `Label` output has a different shape. To use an existing
+Assignment 2 model, serve it behind `app.py`'s contract.
 
-`app.py` exists so the pipeline is reproducible from a clean checkout. It also
-serves `GET /latest` for the Herald companion, which returns the most recent
-prediction and never the frame or the audio.
+`app.py` runs pretrained `imagebind_huge` zero-shot against four text prompts.
+Nothing is fine-tuned, and no Assignment 2 checkpoint is loaded. It loads the
+model at startup (`PRELOAD_MODEL=0` to defer), so the first request doesn't
+time out on a ~4.5 GB download. An audio clip that can't be decoded falls
+back to a vision-only prediction. It also serves `GET /latest` for the Herald
+companion: the most recent prediction, never the frame or the audio. When
+`IMAGEBIND_TOKEN` is set, `/latest` requires the token too, unless
+`LATEST_PUBLIC=1`. The Herald page cannot send a token.
+
+The softmax temperature (`SOFTMAX_TEMPERATURE`, default 0.05) is hand-picked,
+and confidence calibration has not been validated. Treat the app's 0.45
+confidence floor as provisional until it is tuned on real data.
 
 ### Failure injection
 
@@ -256,6 +294,12 @@ endpoint-failure trial is produced without waiting for Colab to actually die:
 /predict?mode=garbage    200 with an HTML body (an expired tunnel)
 /predict?label=running   force a specific activity
 ```
+
+The mock binds `127.0.0.1` by default. To reach it from an iPhone on the same
+Wi-Fi, run it with `--host 0.0.0.0` and set the endpoint to
+`http://<your-mac-LAN-IP>:8000` (`IMAGEBIND_SCHEME = http`). Info.plist allows
+plain HTTP to local-network hosts (`NSAllowsLocalNetworking`). This path has
+not been tried on a device.
 
 ---
 
